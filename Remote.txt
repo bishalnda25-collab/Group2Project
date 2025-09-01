@@ -1,0 +1,123 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
+// Uncomment to print debug messages on Serial Monitor
+//#define PRINT_DEBUG
+
+#define SIGNAL_TIMEOUT 1000  // Signal timeout in ms (was 500)
+
+const uint64_t pipeIn = 0xF9E8F0F0E1LL; // Communication pipe
+RF24 radio(8, 9);  // CE, CSN
+unsigned long lastRecvTime = 0;
+
+// Define data structure for received packet
+struct PacketData {
+  byte xAxisValue;
+  byte yAxisValue;
+} receiverData;
+
+// Right motor pins
+const int enableRightMotor = 5;
+const int rightMotorPin1 = 2;
+const int rightMotorPin2 = 3;
+
+// Left motor pins
+const int enableLeftMotor = 6;
+const int leftMotorPin1 = 4;
+const int leftMotorPin2 = 7;
+
+void setup() {
+  // Set motor control pins as OUTPUT
+  pinMode(enableRightMotor, OUTPUT);
+  pinMode(rightMotorPin1, OUTPUT);
+  pinMode(rightMotorPin2, OUTPUT);
+
+  pinMode(enableLeftMotor, OUTPUT);
+  pinMode(leftMotorPin1, OUTPUT);
+  pinMode(leftMotorPin2, OUTPUT);
+
+  rotateMotor(0, 0); // Stop motors at startup
+
+  #ifdef PRINT_DEBUG
+    Serial.begin(115200);
+    Serial.println("Initializing radio...");
+  #endif
+
+  if (!radio.begin()) {
+    #ifdef PRINT_DEBUG
+      Serial.println("Radio hardware not responding!");
+    #endif
+    while (1); // Halt if radio fails
+  }
+
+  radio.setDataRate(RF24_250KBPS); // Slower = better range
+  radio.openReadingPipe(1, pipeIn);
+  radio.startListening(); // Start receiver
+}
+
+void loop() {
+  int rightMotorSpeed = 0;
+  int leftMotorSpeed = 0;
+
+  if (radio.isChipConnected() && radio.available()) {
+    radio.read(&receiverData, sizeof(PacketData));
+
+    // Map joystick values from 0-255 to -255 to +255
+    int mappedYValue = map(receiverData.yAxisValue, 0, 255, -255, 255);
+    int mappedXValue = map(receiverData.xAxisValue, 0, 255, -255, 255);
+
+    int motorDirection = (mappedYValue >= 0) ? 1 : -1;
+
+    rightMotorSpeed = abs(mappedYValue) - mappedXValue;
+    leftMotorSpeed  = abs(mappedYValue) + mappedXValue;
+
+    // Constrain speeds to valid PWM range
+    rightMotorSpeed = constrain(rightMotorSpeed, 0, 255);
+    leftMotorSpeed  = constrain(leftMotorSpeed, 0, 255);
+
+    rotateMotor(rightMotorSpeed * motorDirection, leftMotorSpeed * motorDirection);
+    lastRecvTime = millis();
+
+    #ifdef PRINT_DEBUG
+      Serial.print("X: "); Serial.println(receiverData.xAxisValue);
+      Serial.print("Y: "); Serial.println(receiverData.yAxisValue);
+    #endif
+
+  } else {
+    // No signal received recently
+    if (millis() - lastRecvTime > SIGNAL_TIMEOUT) {
+      rotateMotor(0, 0); // Stop motors
+    }
+  }
+}
+
+void rotateMotor(int rightMotorSpeed, int leftMotorSpeed) {
+  // RIGHT MOTOR DIRECTION
+  if (rightMotorSpeed < 0) {
+    digitalWrite(rightMotorPin1, LOW);
+    digitalWrite(rightMotorPin2, HIGH);
+  } else if (rightMotorSpeed > 0) {
+    digitalWrite(rightMotorPin1, HIGH);
+    digitalWrite(rightMotorPin2, LOW);
+  } else {
+    digitalWrite(rightMotorPin1, LOW);
+    digitalWrite(rightMotorPin2, LOW);
+  }
+
+  // LEFT MOTOR DIRECTION
+  if (leftMotorSpeed < 0) {
+    digitalWrite(leftMotorPin1, LOW);
+    digitalWrite(leftMotorPin2, HIGH);
+  } else if (leftMotorSpeed > 0) {
+    digitalWrite(leftMotorPin1, HIGH);
+    digitalWrite(leftMotorPin2, LOW);
+  } else {
+    digitalWrite(leftMotorPin1, LOW);
+    digitalWrite(leftMotorPin2, LOW);
+  }
+
+  // Apply PWM speed
+  analogWrite(enableRightMotor, abs(rightMotorSpeed));
+  analogWrite(enableLeftMotor, abs(leftMotorSpeed));
+}
